@@ -33,6 +33,7 @@ import Gundeck.Monad
 import Gundeck.Push.Native.Types
 import Gundeck.Options
 import Gundeck.Types
+import Gundeck.Types.BulkPush
 import Gundeck.Util
 import Network.HTTP.Types
 import Network.Wai (Request, Response)
@@ -48,6 +49,7 @@ import qualified Data.UUID                    as UUID
 import qualified Gundeck.Aws                  as Aws
 import qualified Gundeck.Client               as Client
 import qualified Gundeck.Notification.Data    as Stream
+import qualified Gundeck.Presence.Data        as Presence
 import qualified Gundeck.Push.Data            as Data
 import qualified Gundeck.Push.Native          as Native
 import qualified Gundeck.Push.Native.Fallback as Fallback
@@ -94,9 +96,43 @@ pushAny' p = do
     mkTarget :: Recipient -> NotificationTarget
     mkTarget r = target (r^.recipientId) & targetClients .~ r^.recipientClients
 
--- | Construct and send a single bulk push request to the client.
+-- | Construct and send a single bulk push request to the client.  Write the 'Notification's from
+-- the request to C*.  Trigger native pushes for all delivery failures notifications.
 pushAll :: [Push] -> Gundeck (Either SomeException ())
-pushAll = undefined
+pushAll pushes = do
+    _bulkpush <- BulkPushRequest <$> (mkBulkItem `mapM` pushes)
+
+{-
+        -- ??
+        unless (p^.pushTransient) $
+            Stream.add i tgts pload =<< view (options.optSettings.setNotificationTTL)
+
+        -- send bulkPush (move the pushtarget filtering business to 'mkBulkItem')
+        prs <- Web.push notif tgts (p^.pushOrigin {- don't need it? -})
+                                   (p^.pushOriginConnection {- only for not pushing to that? -} )
+                                   (p^.pushConnections {- only for not pushing to that? -} )
+
+        -- collect the feedback from web sockets push and push native what is left.
+        pushNative sendNotice notif p =<< nativeTargets p prs
+
+-}
+
+    undefined
+
+mkBulkItem :: Push -> Gundeck (Notification, [PushTarget])
+mkBulkItem psh = construct <$> mkNotificationId <*> mkTargets
+  where
+    mkTargets :: Gundeck [Presence]
+    mkTargets = mconcat <$> Presence.listAll ntargets
+      where
+        ntargets :: [UserId]
+        ntargets = view recipientId <$> (toList . fromRange $ psh ^. pushRecipients)
+
+    construct :: NotificationId -> [Presence] -> (Notification, [PushTarget])
+    construct notifId presences = (notif, targets)
+      where
+        notif   = Notification notifId (psh ^. pushTransient) (psh ^. pushPayload)
+        targets = (Presence.userId &&& Presence.connId) <$> presences
 
 pushNative :: Bool -> Notification -> Push -> [Address "no-keys"] -> Gundeck ()
 pushNative sendNotice notif p rcps
